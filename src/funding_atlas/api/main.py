@@ -54,7 +54,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=VERSION,
         description=(
             "Read-only funding, open-interest and coverage data for perpetual futures. "
-            "Decimal values are JSON strings; timestamps are int64 nanoseconds."
+            "Decimal values and nanosecond timestamps are both JSON strings — a JSON "
+            "number holds neither without rounding. Query parameters take plain "
+            "integers."
         ),
     )
     app.add_middleware(

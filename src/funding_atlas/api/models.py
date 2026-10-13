@@ -9,8 +9,12 @@ harmless; a backtest or an invoice built on the same response is not, and the
 API cannot tell which caller it is talking to. So `DecimalStr` serialises to a
 string and the decision is taken away from the consumer.
 
-Timestamps stay raw int64 nanoseconds for the same reason they do on disk: they
-are the integers the venue sent, and a float seconds value cannot hold them.
+Timestamps are nanosecond integers rendered as strings, for the same reason.
+They stay nanoseconds because that is what the venue sent and what is on disk —
+a float seconds value cannot hold them — and they are strings because a JSON
+*number* cannot either: ~1.8e18 is well past JavaScript's safe integer range, so
+every browser client silently rounds one to roughly 256ns. Query parameters
+still take plain integers; the loss is in the JSON number type, not the digits.
 """
 
 from __future__ import annotations
