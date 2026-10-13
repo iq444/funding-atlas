@@ -215,6 +215,15 @@ class DuckStore:
         )
         return [AssetSpan(str(a), int(lo), int(hi), int(n)) for a, lo, hi, n in rows]
 
+    def delisted_assets(self) -> set[str]:
+        """Assets the venue has delisted, per the most recent recorded spec.
+
+        Empty when the `asset_specs` stream has not been recorded yet, which
+        means the caller sees everything — the honest failure direction, since
+        hiding an asset we are not sure about is worse than showing a dead one.
+        """
+        return {asset for asset, row in self.latest_asset_specs().items() if bool(row[7])}
+
     def latest_asset_specs(self) -> dict[str, tuple[Any, ...]]:
         """Most recent recorded spec per asset, from the `asset_specs` stream.
 

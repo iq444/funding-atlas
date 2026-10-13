@@ -56,8 +56,19 @@ DEFAULT_SPAN_NS: dict[str, int] = {
 Bucket = Literal["1h", "1d"]
 
 
+#: Delisted perps keep reporting a funding rate of exactly zero forever. Left in,
+#: they are a quarter of the cross-section and every one of them is untradeable,
+#: so a reader scanning for opportunity is scanning mostly noise. They are hidden
+#: by default and available with `include_delisted=true`, because a historical
+#: question — what was this market doing before it died — is a real one.
+INCLUDE_DELISTED_DESC = "Include perps the venue has delisted. They are untradeable."
+
+
 @router.get("/current", response_model=FundingCurrentOut)
-def current(store: StoreDep) -> FundingCurrentOut:
+def current(
+    store: StoreDep,
+    include_delisted: Annotated[bool, Query(description=INCLUDE_DELISTED_DESC)] = False,
+) -> FundingCurrentOut:
     """Latest funding per asset, sorted by APR descending.
 
     One row per asset from its own most recent sample, so a perp whose poll
@@ -67,6 +78,9 @@ def current(store: StoreDep) -> FundingCurrentOut:
     it judges old.
     """
     samples = store.latest_funding()
+    if not include_delisted:
+        delisted = store.delisted_assets()
+        samples = [s for s in samples if s.asset not in delisted]
     if not samples:
         return FundingCurrentOut(as_of_ns=None, rows=[])
 
@@ -178,6 +192,7 @@ def screener(
     notional: Annotated[Decimal, Query(gt=0)] = Decimal(1000),
     holding_hours: Annotated[Decimal, Query(gt=0)] = Decimal(24),
     side: Literal["short", "long"] = "short",
+    include_delisted: Annotated[bool, Query(description=INCLUDE_DELISTED_DESC)] = False,
 ) -> ScreenerOut:
     """Rank the universe by what a carry actually nets after fees.
 
@@ -187,6 +202,9 @@ def screener(
     makes. `breakeven_hours` is the field to read.
     """
     samples = store.latest_funding()
+    if not include_delisted:
+        delisted = store.delisted_assets()
+        samples = [s for s in samples if s.asset not in delisted]
     inputs = sc.ScreenerInputs(notional=notional, holding_hours=holding_hours, side=side)
     as_of_ns = max((s.ts_event_ns for s in samples), default=None)
     assumptions = _assumptions(store, inputs, as_of_ns)

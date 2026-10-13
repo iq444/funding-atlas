@@ -765,3 +765,58 @@ def test_coverage_does_not_invent_a_hole_in_the_unflushed_window(
     assert all(g["reason"] != "silence" for g in body["gaps"]), (
         "absence from disk in the last rotation is not evidence of absence"
     )
+
+
+def test_delisted_perps_are_hidden_unless_asked_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dead market reports funding of exactly zero forever.
+
+    On the live venue these are a quarter of the cross-section, all of them
+    untradeable, so a reader scanning for opportunity would be scanning mostly
+    noise. They stay reachable, because "what was this market doing before it
+    died" is a real question.
+    """
+    from funding_atlas.venues.records import AssetSpecSample
+
+    root = tmp_path / "data"
+    build_dataset(root)
+    _write(
+        root,
+        "asset_specs",
+        [
+            AssetSpecSample(
+                venue=VENUE,
+                asset=asset,
+                ts_event_ns=T0 + 100,
+                ts_ingest_ns=T0 + 100,
+                price_tick=Decimal("0.1"),
+                price_sig_figs=5,
+                size_lot=Decimal("0.00001"),
+                min_notional=Decimal(10),
+                max_leverage=Decimal(40),
+                is_perp=True,
+                is_delisted=(asset == "SOL"),
+                ts_event_synthetic=True,
+            )
+            for asset in ASSETS
+        ],
+        None,
+        1,
+    )
+    for client in _client(root, monkeypatch):
+        shown = {r["asset"] for r in client.get("/funding/current").json()["rows"]}
+        assert "SOL" not in shown, "a delisted perp must not appear by default"
+        assert shown, "the live ones must still be there"
+
+        with_dead = {
+            r["asset"]
+            for r in client.get("/funding/current", params={"include_delisted": "true"}).json()[
+                "rows"
+            ]
+        }
+        assert "SOL" in with_dead
+
+        screened = {r["asset"] for r in client.get("/funding/screener").json()["rows"]}
+        assert "SOL" not in screened
+        break
