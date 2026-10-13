@@ -107,6 +107,13 @@ Parquet + DuckDB rather than a time-series database: research queries are
 columnar scans over immutable history, which is what this layout is for, and
 it costs nothing to run.
 
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md) — the decisions that shape everything else, and why the build order is not the obvious one
+- [docs/modules.md](docs/modules.md) — every responsibility mapped to the module that owns it
+- [docs/stack.md](docs/stack.md) — what is in the stack now, what is deferred, and the trigger that brings each deferred piece in
+- [docs/deploy-keys.md](docs/deploy-keys.md) — which host holds which credential
+
 ## Operations
 
 Credential layout — which host holds what, and why — is in
