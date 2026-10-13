@@ -14,13 +14,12 @@ endpoint at all. So no data is `empty`, data that has stopped arriving is
 
 from __future__ import annotations
 
-import os
 import shutil
 from typing import Literal
 
 from fastapi import APIRouter
 
-from funding_atlas.api.coverage import MAX_SILENCE_S, cadence_for
+from funding_atlas.api.coverage import FLUSH_INTERVAL_S, FLUSH_SLACK, MAX_SILENCE_S, cadence_for
 from funding_atlas.api.deps import SettingsDep, StoreDep, uptime_s
 from funding_atlas.api.duck import NS_PER_S, DuckStore
 from funding_atlas.api.models import HealthOut, StatsOut, StreamHealth, StreamStats
@@ -30,16 +29,6 @@ from funding_atlas.venues.records import STREAMS
 router = APIRouter(tags=["health"])
 
 _CLOCK = LiveClock()
-
-
-#: How long the recorder may buffer before a partition reaches disk. This API
-#: sees only flushed Parquet, so nothing can appear sooner than a rotation, no
-#: matter how healthy the recorder is. Mirrors `rotation.max_seconds` in
-#: `config/recorder.yaml`; override when that is changed.
-FLUSH_INTERVAL_S = float(os.environ.get("FA_FLUSH_INTERVAL_S", "3600"))
-
-#: Slack over one rotation, so a flush running slightly late is not an incident.
-FLUSH_SLACK = 1.5
 
 
 def _lag_limit_s(stream: str) -> float:

@@ -29,6 +29,8 @@ hour on a thin perp produces no trades and is not a gap. That is the same rule
 from __future__ import annotations
 
 import json
+import os
+import time
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
@@ -53,6 +55,30 @@ MISSED_SAMPLES = 3.0
 #: cadence-derived threshold so that a hole the *recorder* would have called a
 #: gap is never reported as healthy by the API, whatever the stream's cadence.
 MAX_SILENCE_S = 90.0
+
+#: How long the recorder may buffer a stream before its partition reaches disk.
+#: Mirrors `rotation.max_seconds` in `config/recorder.yaml`; override with
+#: FA_FLUSH_INTERVAL_S when that changes.
+FLUSH_INTERVAL_S = float(os.environ.get("FA_FLUSH_INTERVAL_S", "3600"))
+
+#: Slack over one rotation, so a flush running slightly late is not a hole.
+FLUSH_SLACK = 1.5
+
+
+def settled_before_ns(now_ns: int) -> int:
+    """The newest instant for which absence from disk is evidence of absence.
+
+    Everything after this is simply too recent to judge: the recorder buffers
+    for up to a rotation, so a stream that is being recorded perfectly has
+    nothing on disk for it yet. Inferring a gap there invents a hole that never
+    happened — and for a project whose credibility rests on publishing its own
+    holes, a false one is as damaging as a hidden one, because a researcher
+    discards good data over it.
+
+    Inside this window the event log is the only authority: a real shutdown or
+    disconnect is still reported, because it was witnessed rather than inferred.
+    """
+    return now_ns - int(FLUSH_INTERVAL_S * FLUSH_SLACK * NS_PER_S)
 
 
 def cadence_for(stream: str) -> float | None:
@@ -163,24 +189,31 @@ def _derived_gaps(
         # Market-driven stream: silence is not evidence. See the module note.
         return []
 
-    first, last, count = store.sample_bounds(stream, asset, from_ns, to_ns)
+    # Absence is only evidence for the part of the window old enough to have
+    # been flushed. See `settled_before_ns`.
+    judge_to = min(to_ns, settled_before_ns(time.time_ns()))
+    if judge_to <= from_ns:
+        # The whole window is too recent to judge from files alone.
+        return []
+
+    first, last, count = store.sample_bounds(stream, asset, from_ns, judge_to)
     if count == 0 or first is None or last is None:
-        # Nothing at all in the window. The whole of it is unrecorded — which is
-        # also the honest answer for a dataset that is still empty, and is why
-        # an empty dataset reports `covered: false` rather than failing.
-        return [_gap(stream, asset, from_ns, to_ns, "no samples recorded in range")]
+        # Nothing at all in the judgeable window. The whole of it is unrecorded —
+        # also the honest answer for a dataset that is still empty, and why an
+        # empty dataset reports `covered: false` rather than failing.
+        return [_gap(stream, asset, from_ns, judge_to, "no samples recorded in range")]
 
     gaps = [
         _gap(stream, asset, prev, nxt, f"{(nxt - prev) / NS_PER_S:.3f}s between samples")
-        for prev, nxt in store.sample_gaps(stream, asset, from_ns, to_ns, limit)
+        for prev, nxt in store.sample_gaps(stream, asset, from_ns, judge_to, limit)
     ]
     # Edges are gaps too, and the trailing one is the common case in production:
     # a window that runs to "now" over a recorder that died ten minutes ago is
     # exactly the chart nobody should draw.
     if first - from_ns > limit:
         gaps.append(_gap(stream, asset, from_ns, first, "no samples before first in range"))
-    if to_ns - last > limit:
-        gaps.append(_gap(stream, asset, last, to_ns, "no samples after last in range"))
+    if judge_to - last > limit:
+        gaps.append(_gap(stream, asset, last, judge_to, "no samples after last in range"))
     return gaps
 
 

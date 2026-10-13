@@ -16,6 +16,7 @@ whatever the recorder happened to do.
 from __future__ import annotations
 
 import datetime as dt
+import time
 from collections.abc import Iterator
 from decimal import Decimal
 from pathlib import Path
@@ -730,3 +731,37 @@ def test_a_healthy_recorder_is_not_degraded_merely_for_buffering(
     # A market-driven stream still has no limit: a quiet perp cannot turn the
     # page red, however long it has been silent.
     assert health_route._lag_limit_s("trades") == float("inf")
+
+
+def test_coverage_does_not_invent_a_hole_in_the_unflushed_window(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A recorder that is recording but has not flushed has no gap.
+
+    Found live: the dashboard reported a 22-minute hole where the recorder's own
+    event log recorded 45 seconds. The difference was buffered data — present,
+    simply not yet on disk. Publishing a hole that did not happen is as damaging
+    as hiding one that did, because a researcher discards good data over it.
+    """
+    from funding_atlas.api import coverage as cov
+
+    # Real wall-clock now: the clipping is defined against it, so a fixture
+    # timestamp from hours ago is already settled and would be judged normally.
+    now = time.time_ns()
+    settled = cov.settled_before_ns(now)
+    assert now - settled >= cov.FLUSH_INTERVAL_S * NS_PER_S, (
+        "the unjudgeable window must cover at least one rotation"
+    )
+
+    # A range entirely inside the unflushed window yields no inferred gap at all.
+    body = client.get(
+        "/coverage",
+        params={
+            "stream": "funding",
+            "from_ns": str(now - 60 * 10**9),
+            "to_ns": str(now),
+        },
+    ).json()
+    assert all(g["reason"] != "silence" for g in body["gaps"]), (
+        "absence from disk in the last rotation is not evidence of absence"
+    )
