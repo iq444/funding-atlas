@@ -79,7 +79,7 @@ disk in week one and losing the stream is not.
 ## Quickstart
 
 ```bash
-git clone https://github.com/<you>/funding-atlas && cd funding-atlas
+git clone https://github.com/iq444/funding-atlas && cd funding-atlas
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
