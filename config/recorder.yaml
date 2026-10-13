@@ -1,0 +1,42 @@
+# Recorder configuration.
+#
+# Disk is the binding constraint, not CPU. L2 book snapshots dominate volume,
+# so they are opt-in per asset while trades/funding are recorded broadly.
+# Widening this list later is cheap; filling the disk in week one and losing
+# the stream is not.
+
+venue: hyperliquid
+network: mainnet
+
+# Rotate parquet files on either bound, whichever comes first.
+rotation:
+  max_rows: 500_000
+  max_seconds: 3600
+
+# Recorded for every listed perp.
+universe:
+  mode: all_perps          # all_perps | explicit
+  explicit: []             # used when mode: explicit
+
+streams:
+  funding:
+    enabled: true
+    poll_seconds: 60       # funding is hourly on HL; 60s captures the predicted path
+  trades:
+    enabled: true
+  mids:
+    enabled: true
+    sample_seconds: 1
+  l2_book:
+    enabled: true
+    # Only these assets get book snapshots. Keep the list short at first.
+    assets: [BTC, ETH, SOL, HYPE, XRP, DOGE, SUI, ARB, AVAX, LINK]
+    sample_ms: 500
+    depth: 20              # levels per side
+
+# Gap detection: the recorder must know when it lost data, because lost book
+# data is unrecoverable. Any gap is written to the event log as a first-class
+# event, not a log line.
+integrity:
+  heartbeat_seconds: 30
+  max_silence_seconds: 90  # no message in this window => reconnect + record gap

@@ -1,0 +1,63 @@
+# Single-host deployment: recorder + Postgres + Data API.
+#
+# Sized for the smallest useful VPS (2 vCPU / 4 GB). The recorder is I/O bound,
+# not CPU bound. A managed database is not needed at this stage and would cost
+# several times the server.
+#
+# NOTE: when live execution is added later it does NOT belong in this file.
+# The host holding trading keys must not be the host serving a public
+# dashboard — that is a security boundary, not an optimisation.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: atlas
+      POSTGRES_PASSWORD: ${FA_PG_PASSWORD:-atlas}
+      POSTGRES_DB: atlas
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlas"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Not published: only reachable inside the compose network.
+
+  recorder:
+    build: .
+    restart: unless-stopped
+    command: ["fa-record", "--config", "/app/config/recorder.yaml"]
+    env_file: .env
+    environment:
+      FA_PG_DSN: postgresql://atlas:${FA_PG_PASSWORD:-atlas}@postgres:5432/atlas
+      FA_DATA_DIR: /data
+    volumes:
+      - ./config:/app/config:ro
+      - atlasdata:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # The recorder must survive reboots untouched: a gap is permanent.
+    stop_grace_period: 30s
+
+  api:
+    build: .
+    restart: unless-stopped
+    command: ["fa-api", "--host", "0.0.0.0", "--port", "8000"]
+    env_file: .env
+    environment:
+      FA_PG_DSN: postgresql://atlas:${FA_PG_PASSWORD:-atlas}@postgres:5432/atlas
+      FA_DATA_DIR: /data
+    volumes:
+      - atlasdata:/data:ro
+    ports:
+      - "127.0.0.1:8000:8000"   # front with a reverse proxy, never exposed raw
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  atlasdata:
