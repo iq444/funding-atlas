@@ -1,0 +1,69 @@
+# funding-atlas edge.
+#
+# Serves two things from one host: the dashboard as static files, and the
+# read-only Data API as a reverse proxy. Neither needs an application server —
+# every dashboard page is a client component that reads the API from the
+# browser — which is why the machine recording market data 24/7 does not also
+# have to run Node.
+#
+# Domains come from the environment so this file is not tied to one deployment:
+#   FA_DOMAIN      e.g. fundingatlas.online
+#   FA_API_DOMAIN  e.g. api.fundingatlas.online
+
+{
+	email {$FA_ACME_EMAIL}
+	# Certificates are issued and renewed automatically. Nothing here needs a
+	# manual step at 03:00 three months from now.
+}
+
+(hardening) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		# Caddy's own version is not anyone's business.
+		-Server
+	}
+}
+
+{$FA_DOMAIN} {
+	import hardening
+	encode zstd gzip
+	root * /srv/web
+
+	# The asset route is exported as a single placeholder page: a static export
+	# must know every path at build time, but the listed perps change whenever
+	# the venue lists or delists one. Rewriting /asset/<symbol> onto that one
+	# page lets the browser read the symbol from the URL, so a new listing needs
+	# no rebuild.
+	@asset path_regexp ^/asset/[^/]+/?$
+	rewrite @asset /asset/_/index.html
+
+	file_server
+
+	handle_errors {
+		rewrite * /404.html
+		file_server
+	}
+}
+
+www.{$FA_DOMAIN} {
+	import hardening
+	redir https://{$FA_DOMAIN}{uri} permanent
+}
+
+{$FA_API_DOMAIN} {
+	import hardening
+
+	# Read-only by construction: nothing in this API writes, and a test asserts
+	# no file under the data directory changes mtime across every endpoint. So
+	# anything that is not a safe method is a probe, and is refused at the edge
+	# rather than reaching the application.
+	@unsafe not method GET HEAD OPTIONS
+	respond @unsafe "method not allowed" 405
+
+	reverse_proxy api:8000 {
+		header_up X-Forwarded-For {remote_host}
+	}
+}

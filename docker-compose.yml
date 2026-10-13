@@ -52,12 +52,37 @@ services:
       FA_DATA_DIR: /data
     volumes:
       - atlasdata:/data:ro
-    ports:
-      - "127.0.0.1:8000:8000"   # front with a reverse proxy, never exposed raw
+    expose:
+      - "8000"   # compose network only; Caddy is the only way in
     depends_on:
       postgres:
         condition: service_healthy
 
+  # Edge: TLS, the static dashboard, and the API proxy. Behind a profile so a
+  # development host can run the recorder without claiming ports 80 and 443.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["edge"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      FA_DOMAIN: ${FA_DOMAIN:?set FA_DOMAIN in .env}
+      FA_API_DOMAIN: ${FA_API_DOMAIN:?set FA_API_DOMAIN in .env}
+      FA_ACME_EMAIL: ${FA_ACME_EMAIL:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./web/out:/srv/web:ro
+      - caddydata:/data      # certificates: losing this means re-issuing them
+      - caddyconfig:/config
+    depends_on:
+      - api
+
+
 volumes:
   pgdata:
   atlasdata:
+  caddydata:
+  caddyconfig:
