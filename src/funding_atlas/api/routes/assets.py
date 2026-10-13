@@ -1,29 +1,26 @@
 """`/assets` — the recorded universe and what is known about each instrument.
 
-An honest caveat belongs at the top of this file, because the response looks
-more authoritative than it is: **the recorder does not persist venue metadata.**
-`records.STREAMS` is trades, mids, l2, funding and open_interest — there is no
-`meta` stream, so `szDecimals`, `maxLeverage` and the margin tables are fetched
-at startup, used to build subscriptions, and never written down.
+Two sources, in order of authority:
 
-What that means per field:
+1. **The `asset_specs` stream.** The venue's own rules, polled from `meta` and
+   written to disk, so a historical question gets the rules that applied *then*
+   rather than the ones that apply now. This is the authoritative source and is
+   used whenever the stream has data.
 
-* `first_seen_ns` / `last_seen_ns` / `has_l2` — observed. Exact.
-* `price_sig_figs` / `min_notional` — venue *rules*, not per-asset data. Fixed
-  by docs/hyperliquid-api.md §7 (5 significant figures, $10 minimum) and
-  returned as the constants they are.
-* `price_tick` / `size_lot` — derived from `szDecimals`, which is recovered from
-  the widest size observed on the tape (see `DuckStore.observed_size_scale`).
-  A lower bound, and therefore an *upper* bound on the true lot size: an asset
-  whose recent trades all happened to be round numbers will report a coarser lot
-  than the venue allows. Good enough to render a price column, not good enough
-  to size an order — which is what `null` for an asset with no trades is saying.
-* `max_leverage` — `null`, always, today. It exists only in the `meta` response
-  and nothing on disk implies it. A plausible guess here would be indistinguish-
-  able from a real value to every consumer, so there is none.
+2. **Inference from the tape**, as a fallback for data recorded before that
+   stream existed. `szDecimals` is recovered from the widest size observed in
+   trades, which is a lower bound on the venue's precision and therefore an
+   *upper* bound on lot fineness: an asset whose recent trades were all round
+   numbers reports a coarser lot than the venue allows, and `max_leverage` is
+   simply unknowable. Good enough to render a price column, not to size an
+   order.
 
-The fix is a `meta`/universe stream in the recorder. Until then this endpoint
-says what it knows and marks the rest absent.
+`source` on each row says which was used, because a consumer sizing an order
+needs to know whether it is reading a recorded rule or a guess.
+
+`price_sig_figs` and `min_notional` are venue-wide *rules* rather than per-asset
+data (docs/hyperliquid-api.md §7: five significant figures, $10 minimum) and are
+returned as the constants they are when no recorded spec is available.
 """
 
 from __future__ import annotations
@@ -63,22 +60,50 @@ def assets(store: StoreDep) -> AssetsOut:
         return AssetsOut(assets=[], as_of_ns=None)
 
     with_l2 = store.assets_with_l2()
-    size_scale = store.observed_size_scale(SIZE_SCALE_LOOKBACK_NS)
+    recorded = store.latest_asset_specs()
+    # Only scanned when something is actually missing from the recorded stream.
+    # It is a tape scan over a day of trades, and paying for it to answer a
+    # question the specs stream already answers would be waste.
+    size_scale = (
+        store.observed_size_scale(SIZE_SCALE_LOOKBACK_NS)
+        if any(a not in recorded for a in spans)
+        else {}
+    )
 
-    rows = [
-        AssetOut(
-            asset=asset,
-            price_tick=_price_tick(size_scale.get(asset)),
-            price_sig_figs=PRICE_SIG_FIGS,
-            size_lot=_size_lot(size_scale.get(asset)),
-            min_notional=MIN_NOTIONAL,
-            max_leverage=None,  # not on disk; see the module docstring
-            first_seen_ns=first_ns,
-            last_seen_ns=last_ns,
-            has_l2=asset in with_l2,
-        )
-        for asset, (first_ns, last_ns) in sorted(spans.items())
-    ]
+    rows = []
+    for asset, (first_ns, last_ns) in sorted(spans.items()):
+        spec = recorded.get(asset)
+        if spec is not None:
+            _, tick, sig_figs, lot, min_notional, max_lev, _is_perp, _delisted, _ts = spec
+            rows.append(
+                AssetOut(
+                    asset=asset,
+                    price_tick=tick,
+                    price_sig_figs=sig_figs,
+                    size_lot=lot,
+                    min_notional=min_notional,
+                    max_leverage=max_lev,
+                    first_seen_ns=first_ns,
+                    last_seen_ns=last_ns,
+                    has_l2=asset in with_l2,
+                    source="recorded",
+                )
+            )
+        else:
+            rows.append(
+                AssetOut(
+                    asset=asset,
+                    price_tick=_price_tick(size_scale.get(asset)),
+                    price_sig_figs=PRICE_SIG_FIGS,
+                    size_lot=_size_lot(size_scale.get(asset)),
+                    min_notional=MIN_NOTIONAL,
+                    max_leverage=None,
+                    first_seen_ns=first_ns,
+                    last_seen_ns=last_ns,
+                    has_l2=asset in with_l2,
+                    source="inferred",
+                )
+            )
     return AssetsOut(assets=rows, as_of_ns=max(last for _, last in spans.values()))
 
 

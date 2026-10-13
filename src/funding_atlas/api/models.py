@@ -144,10 +144,18 @@ class AssetOut(_Out):
     price_sig_figs: int | None
     size_lot: DecimalStr | None
     min_notional: DecimalStr | None
-    max_leverage: int | None
+    #: A string like every other quantity that multiplies notional. `price_sig_figs`
+    #: stays an int because it counts digits rather than measuring anything — the
+    #: rule is "numbers you do money arithmetic with are strings".
+    max_leverage: DecimalStr | None
     first_seen_ns: OptNanos
     last_seen_ns: OptNanos
     has_l2: bool
+    #: Where the trading rules came from. "recorded" is the venue's own `meta`
+    #: as it was at that time; "inferred" is reconstructed from observed trade
+    #: sizes and is a bound, not a rule. A consumer sizing an order must not
+    #: treat the two alike.
+    source: Literal["recorded", "inferred"] = "inferred"
 
 
 class AssetsOut(_Out):

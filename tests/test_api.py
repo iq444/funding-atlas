@@ -652,3 +652,60 @@ def test_cors_allows_the_configured_dashboard_origin(
             assert "access-control-allow-origin" not in other.headers
     finally:
         deps.reset_state()
+
+
+# -- recorded asset specs ---------------------------------------------------
+
+
+@pytest.fixture
+def specs_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """A dataset that also has the `asset_specs` stream the recorder now writes."""
+    from funding_atlas.venues.records import AssetSpecSample
+
+    root = tmp_path / "data"
+    build_dataset(root)
+    _write(
+        root,
+        "asset_specs",
+        [
+            AssetSpecSample(
+                venue=VENUE,
+                asset="BTC",
+                ts_event_ns=T0 + 100,
+                ts_ingest_ns=T0 + 100,
+                price_tick=Decimal("0.1"),
+                price_sig_figs=5,
+                size_lot=Decimal("0.00001"),
+                min_notional=Decimal(10),
+                max_leverage=Decimal(40),
+                is_perp=True,
+                is_delisted=False,
+                ts_event_synthetic=True,
+            )
+        ],
+        None,
+        1,
+    )
+    yield from _client(root, monkeypatch)
+
+
+def test_assets_prefers_recorded_specs_over_tape_inference(specs_client: TestClient) -> None:
+    """A recorded rule beats a reconstruction, and says which it is.
+
+    Inference from observed trade sizes is a bound, not a rule — an asset traded
+    in round numbers looks coarser than the venue allows. A consumer sizing an
+    order has to be able to tell the two apart.
+    """
+    rows = rows_by_asset(specs_client.get("/assets").json()["assets"])
+
+    btc = rows["BTC"]
+    assert btc["source"] == "recorded"
+    assert btc["max_leverage"] == "40"  # unobtainable from the tape at any price
+    assert btc["price_tick"] == "0.1"
+    assert btc["size_lot"] == "0.00001"
+
+    # An asset with no recorded spec still answers, flagged as reconstructed.
+    others = [r for a, r in rows.items() if a != "BTC"]
+    assert others, "fixture should contain an asset without a recorded spec"
+    assert all(r["source"] == "inferred" for r in others)
+    assert all(r["max_leverage"] is None for r in others)
