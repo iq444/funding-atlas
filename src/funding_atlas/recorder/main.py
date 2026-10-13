@@ -531,12 +531,18 @@ class Recorder:
         """
         now_ns = self._clock.now_ns()
         rows: dict[str, int] = {}
+        # Per stream, not just a total. `rows_written` counts only what has been
+        # flushed, and rotation is hourly — so a perfectly healthy recorder
+        # reports zeros for an hour, which reads exactly like one that is
+        # recording nothing. The buffered counts are what show it is alive.
+        buffered: dict[str, int] = {}
         ages: dict[str, float | None] = {}
         pending = 0
         for name, writer in self._writers.items():
             rows[name] = writer.rows_written.get(name, 0)
             last = writer.last_flush_ns.get(name)
             ages[name] = None if last is None else round((now_ns - last) / _NS_PER_S, 3)
+            buffered[name] = writer.pending_rows
             pending += writer.pending_rows
         down = sorted(
             f"{stream}:{asset or '*'}"
@@ -545,6 +551,7 @@ class Recorder:
         )
         return {
             "rows_written": rows,
+            "buffered_rows": buffered,
             "last_flush_age_s": ages,
             "pending_rows": pending,
             "down": down,
