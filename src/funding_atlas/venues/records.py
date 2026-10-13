@@ -13,6 +13,12 @@ Rules that apply to all of them:
 * Two timestamps: `ts_event_ns` as stamped by the venue, `ts_ingest_ns` from our
   clock. The difference is observable latency and is kept as data, not
   normalised away.
+* Some venue streams carry no time at all (on Hyperliquid, `allMids` and
+  `activeAssetCtx`). There `ts_event_ns` is filled from our clock and
+  `ts_event_synthetic` is set, so research can tell a venue timestamp from our
+  guess instead of silently measuring our own latency against itself. The field
+  is never dropped to keep the column non-nullable: a nullable timestamp would
+  push the decision onto every consumer, and partitioning needs a value.
 * Records are immutable. History is append-only; a correction is a new record,
   never an edit.
 """
@@ -36,8 +42,12 @@ class Trade:
     ts_ingest_ns: int
     price: Decimal
     size: Decimal
-    side: Side          # aggressor side
+    side: Side  # aggressor side
+    #: Venue trade id. NOT globally unique on Hyperliquid — `tid` there is a
+    #: 50-bit hash, so dedupe on (venue, asset, ts_event_ns, trade_id).
     trade_id: str
+    #: True when the venue sent no timestamp and `ts_event_ns` is our own.
+    ts_event_synthetic: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +59,8 @@ class Mid:
     ts_event_ns: int
     ts_ingest_ns: int
     mid: Decimal
+    #: True when the venue sent no timestamp and `ts_event_ns` is our own.
+    ts_event_synthetic: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +86,8 @@ class BookSnapshot:
     ts_ingest_ns: int
     bids: tuple[BookLevel, ...]
     asks: tuple[BookLevel, ...]
+    #: True when the venue sent no timestamp and `ts_event_ns` is our own.
+    ts_event_synthetic: bool = False
 
     @property
     def best_bid(self) -> Decimal | None:
@@ -102,6 +116,8 @@ class FundingSample:
     premium: Decimal | None = None
     oracle_price: Decimal | None = None
     mark_price: Decimal | None = None
+    #: True when the venue sent no timestamp and `ts_event_ns` is our own.
+    ts_event_synthetic: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +127,8 @@ class OpenInterest:
     ts_event_ns: int
     ts_ingest_ns: int
     open_interest: Decimal
+    #: True when the venue sent no timestamp and `ts_event_ns` is our own.
+    ts_event_synthetic: bool = False
 
 
 #: Stream name -> record type. Used by writers for partition paths and schemas,

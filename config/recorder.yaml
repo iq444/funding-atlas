@@ -27,12 +27,23 @@ streams:
   mids:
     enabled: true
     sample_seconds: 1
-  l2_book:
+  l2:
     enabled: true
     # Only these assets get book snapshots. Keep the list short at first.
+    #
+    # Hyperliquid sends a full 20-level snapshot per message with no deltas, so
+    # this stream is the one that fills the disk. For assets NOT listed here,
+    # consider the venue's `bbo` stream instead: it fires only when the best
+    # bid or ask changes and answers most spread questions at a fraction of the
+    # volume. See docs/hyperliquid-api.md.
     assets: [BTC, ETH, SOL, HYPE, XRP, DOGE, SUI, ARB, AVAX, LINK]
     sample_ms: 500
     depth: 20              # levels per side
+  open_interest:
+    enabled: true
+    # Reported in coin base units, not notional — converting needs a mark price
+    # from the same sample, so both arrive on the same venue poll.
+    poll_seconds: 60
 
 # Gap detection: the recorder must know when it lost data, because lost book
 # data is unrecoverable. Any gap is written to the event log as a first-class
