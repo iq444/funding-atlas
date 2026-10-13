@@ -31,14 +31,14 @@ __all__ = [
     "FundingHistoryPoint",
     "GapOut",
     "HealthOut",
+    "Nanos",
+    "OptNanos",
     "ScreenerAssumptions",
     "ScreenerOut",
     "ScreenerRow",
     "StatsOut",
     "StreamHealth",
     "StreamStats",
-    "Nanos",
-    "OptNanos",
     "decimal_str",
     "nanos_str",
 ]
@@ -200,6 +200,14 @@ class ScreenerAssumptions(_Out):
     taker_fee_rate: DecimalStr
     maker_fee_rate: DecimalStr
     fee_role: Literal["taker", "maker"]
+    #: Stated as zero rather than left out. An unmodelled cost that is simply
+    #: absent from the assumptions reads as "not a factor", when in fact it is
+    #: the largest unknown on a thin book. Silence is itself an assumption, so
+    #: it is given a name and a number a caller can argue with.
+    slippage_bps: DecimalStr = Decimal(0)
+    #: Funding is assumed to persist at the current rate for the whole holding
+    #: period. It does not; this is the screener's weakest premise.
+    rate_is_assumed_constant: bool = True
     legs: int
     fills: int
     fee_model: str

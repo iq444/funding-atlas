@@ -3,7 +3,7 @@ name = "funding-atlas"
 version = "0.0.1"
 description = "Open market-data recorder, event log and research toolkit for perpetual-futures funding"
 requires-python = ">=3.12"
-license = { text = "Apache-2.0" }
+license = { text = "MIT OR Apache-2.0" }
 dependencies = [
     "websockets>=13.0",
     "httpx>=0.27",

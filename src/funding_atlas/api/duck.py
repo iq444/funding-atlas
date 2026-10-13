@@ -215,6 +215,28 @@ class DuckStore:
         )
         return [AssetSpan(str(a), int(lo), int(hi), int(n)) for a, lo, hi, n in rows]
 
+    def latest_asset_specs(self) -> dict[str, tuple[Any, ...]]:
+        """Most recent recorded spec per asset, from the `asset_specs` stream.
+
+        Returns the venue's own rules rather than anything inferred from the
+        tape. Empty when the stream has not been recorded yet — the recorder
+        gained it after the first deployments, so historical data directories
+        legitimately have none and the caller falls back.
+        """
+        if not self.has_files("asset_specs"):
+            return {}
+        rows = self.query(
+            """
+            SELECT asset, price_tick, price_sig_figs, size_lot, min_notional,
+                   max_leverage, is_perp, is_delisted, ts_ingest_ns
+            FROM read_parquet(?)
+            WHERE venue = ?
+            QUALIFY row_number() OVER (PARTITION BY asset ORDER BY ts_ingest_ns DESC) = 1
+            """,
+            (self.glob("asset_specs"), self.venue),
+        )
+        return {str(r[0]): r for r in rows}
+
     def assets_with_l2(self) -> set[str]:
         """Assets that actually have book snapshots on disk.
 

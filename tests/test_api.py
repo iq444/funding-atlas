@@ -205,7 +205,7 @@ def test_health_reports_last_write_and_rows_per_stream(client: TestClient) -> No
     assert body["status"] == "degraded"  # the fixture is historical, so lag is large
     funding = body["streams"]["funding"]
     assert funding["rows"] == len(SAMPLE_MINUTES) * len(ASSETS)
-    assert funding["last_write_ns"] == T0 + 359 * MINUTE_NS + 1_000
+    assert funding["last_write_ns"] == str(T0 + 359 * MINUTE_NS + 1_000)
     assert funding["lag_s"] > 0
     # A configured-but-silent stream is reported with nulls, not omitted.
     assert body["streams"]["mids"] == {"last_write_ns": None, "lag_s": None, "rows": 0}
@@ -217,8 +217,8 @@ def test_stats_reports_span_files_and_bytes(client: TestClient) -> None:
     body = client.get("/stats").json()
 
     funding = body["streams"]["funding"]
-    assert funding["first_ns"] == T0
-    assert funding["last_ns"] == T0 + 359 * MINUTE_NS
+    assert funding["first_ns"] == str(T0)
+    assert funding["last_ns"] == str(T0 + 359 * MINUTE_NS)
     assert funding["files"] == 1
     assert funding["bytes"] > 0
     assert body["streams"]["mids"] == {
@@ -240,7 +240,7 @@ def test_assets_derives_specs_from_observed_data(client: TestClient) -> None:
     assets = rows_by_asset(body["assets"])
 
     assert set(assets) == set(ASSETS)
-    assert body["as_of_ns"] == T0 + 359 * MINUTE_NS
+    assert body["as_of_ns"] == str(T0 + 359 * MINUTE_NS)
 
     btc = assets["BTC"]
     # szDecimals recovered as 5 from a size of 0.00123, so lot = 1e-5 and the
@@ -250,7 +250,7 @@ def test_assets_derives_specs_from_observed_data(client: TestClient) -> None:
     assert btc["price_sig_figs"] == 5
     assert btc["min_notional"] == "10"
     assert btc["has_l2"] is True
-    assert btc["first_seen_ns"] == T0
+    assert btc["first_seen_ns"] == str(T0)
     # Venue metadata the recorder does not persist stays null rather than guessed.
     assert btc["max_leverage"] is None
 
@@ -270,7 +270,7 @@ def test_assets_derives_specs_from_observed_data(client: TestClient) -> None:
 def test_current_annualises_from_interval_s_and_sorts_by_apr(client: TestClient) -> None:
     body = client.get("/funding/current").json()
 
-    assert body["as_of_ns"] == T0 + 359 * MINUTE_NS
+    assert body["as_of_ns"] == str(T0 + 359 * MINUTE_NS)
     # SOL's rate is numerically 16x BTC's but quoted on an 8-hour interval, so
     # it ranks 2x higher — not 16x. Hardcoding an interval anywhere would put
     # these two in the wrong order.
@@ -322,7 +322,7 @@ def test_decimals_arrive_as_strings_with_no_precision_loss(client: TestClient) -
 def test_history_buckets_hourly_and_reports_the_gap(client: TestClient) -> None:
     body = client.get(
         "/funding/history",
-        params={"asset": "BTC", "from_ns": T0, "to_ns": SPAN_END_NS, "bucket": "1h"},
+        params={"asset": "BTC", "from_ns": str(T0), "to_ns": str(SPAN_END_NS), "bucket": "1h"},
     ).json()
 
     assert body["asset"] == "BTC"
@@ -330,9 +330,9 @@ def test_history_buckets_hourly_and_reports_the_gap(client: TestClient) -> None:
     # Six hours of buckets minus the two whose samples are missing entirely;
     # the hole spans minutes 121-179, so hour 2 keeps its first sample.
     ts = [point["ts_ns"] for point in body["points"]]
-    assert ts == [T0 + hour * HOUR_NS for hour in (0, 1, 2, 3, 4, 5)]
+    assert ts == [str(T0 + hour * HOUR_NS) for hour in (0, 1, 2, 3, 4, 5)]
     # Bucket edges land on real UTC hours, not on the first sample seen.
-    assert all(point % HOUR_NS == 0 for point in ts)
+    assert all(int(point) % HOUR_NS == 0 for point in ts)
 
     for point in body["points"]:
         assert Decimal(point["rate_hourly"]) == HOURLY["BTC"]
@@ -344,8 +344,8 @@ def test_history_buckets_hourly_and_reports_the_gap(client: TestClient) -> None:
     assert coverage["covered"] is False
     assert coverage["gaps"] == [
         {
-            "from_ns": GAP_FROM_NS,
-            "to_ns": GAP_TO_NS,
+            "from_ns": str(GAP_FROM_NS),
+            "to_ns": str(GAP_TO_NS),
             "reason": "silence",
             "duration_s": 3600.0,
         }
@@ -356,7 +356,7 @@ def test_history_buckets_hourly_and_reports_the_gap(client: TestClient) -> None:
 def test_history_reports_covered_on_a_clean_range(client: TestClient) -> None:
     body = client.get(
         "/funding/history",
-        params={"asset": "BTC", "from_ns": T0, "to_ns": T0 + 60 * MINUTE_NS, "bucket": "1h"},
+        params={"asset": "BTC", "from_ns": str(T0), "to_ns": T0 + 60 * MINUTE_NS, "bucket": "1h"},
     ).json()
 
     assert body["coverage"] == {"covered": True, "missing_s": 0.0, "gaps": []}
@@ -365,12 +365,12 @@ def test_history_reports_covered_on_a_clean_range(client: TestClient) -> None:
 def test_history_daily_bucket_averages_every_sample(client: TestClient) -> None:
     body = client.get(
         "/funding/history",
-        params={"asset": "SOL", "from_ns": T0, "to_ns": SPAN_END_NS, "bucket": "1d"},
+        params={"asset": "SOL", "from_ns": str(T0), "to_ns": str(SPAN_END_NS), "bucket": "1d"},
     ).json()
 
     assert len(body["points"]) == 1
     point = body["points"][0]
-    assert point["ts_ns"] == T0  # T0 is a UTC midnight
+    assert point["ts_ns"] == str(T0)  # T0 is a UTC midnight
     # Every sample carries the same rate, so the mean is that rate normalised
     # from its own 8-hour interval.
     assert Decimal(point["rate_hourly"]) == HOURLY["SOL"]
@@ -500,7 +500,12 @@ def test_coverage_reports_a_gap_on_a_range_that_straddles_the_hole(client: TestC
 
     assert body["covered"] is False
     assert body["gaps"] == [
-        {"from_ns": GAP_FROM_NS, "to_ns": GAP_TO_NS, "reason": "silence", "duration_s": 3600.0}
+        {
+            "from_ns": str(GAP_FROM_NS),
+            "to_ns": str(GAP_TO_NS),
+            "reason": "silence",
+            "duration_s": 3600.0,
+        }
     ]
     assert body["missing_s"] == 3600.0
 
@@ -523,11 +528,16 @@ def test_coverage_clips_a_gap_to_the_window_asked_about(client: TestClient) -> N
     # gap's full historical extent.
     midpoint = GAP_FROM_NS + 30 * MINUTE_NS
     body = client.get(
-        "/coverage", params={"stream": "funding", "from_ns": midpoint, "to_ns": GAP_TO_NS}
+        "/coverage", params={"stream": "funding", "from_ns": str(midpoint), "to_ns": GAP_TO_NS}
     ).json()
 
     assert body["gaps"] == [
-        {"from_ns": midpoint, "to_ns": GAP_TO_NS, "reason": "silence", "duration_s": 1800.0}
+        {
+            "from_ns": str(midpoint),
+            "to_ns": str(GAP_TO_NS),
+            "reason": "silence",
+            "duration_s": 1800.0,
+        }
     ]
 
 
@@ -536,7 +546,7 @@ def test_coverage_does_not_judge_trades_by_silence(client: TestClient) -> None:
     # fixture holds exactly one trade and the window is six hours wide.
     body = client.get(
         "/coverage",
-        params={"stream": "trades", "asset": "BTC", "from_ns": T0, "to_ns": SPAN_END_NS},
+        params={"stream": "trades", "asset": "BTC", "from_ns": str(T0), "to_ns": SPAN_END_NS},
     ).json()
 
     assert body == {"covered": True, "missing_s": 0.0, "gaps": []}

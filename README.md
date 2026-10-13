@@ -148,4 +148,22 @@ discover the answer later.
 
 ## Licence
 
-Apache-2.0. See [LICENSE](LICENSE).
+Dual licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT licence ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+`SPDX-License-Identifier: MIT OR Apache-2.0`
+
+### Contributions
+
+Unless you state otherwise, any contribution intentionally submitted for
+inclusion in this work shall be dual licensed as above, without additional terms
+or conditions.
+
+This is stated up front because it cannot be fixed retroactively: a contribution
+offered under only one of the two licences cannot later be redistributed under
+the other, and a repository that accumulates such contributions quietly splits
+into parts with different terms.
