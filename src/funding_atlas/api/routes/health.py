@@ -14,6 +14,7 @@ endpoint at all. So no data is `empty`, data that has stopped arriving is
 
 from __future__ import annotations
 
+import os
 import shutil
 from typing import Literal
 
@@ -31,17 +32,35 @@ router = APIRouter(tags=["health"])
 _CLOCK = LiveClock()
 
 
+#: How long the recorder may buffer before a partition reaches disk. This API
+#: sees only flushed Parquet, so nothing can appear sooner than a rotation, no
+#: matter how healthy the recorder is. Mirrors `rotation.max_seconds` in
+#: `config/recorder.yaml`; override when that is changed.
+FLUSH_INTERVAL_S = float(os.environ.get("FA_FLUSH_INTERVAL_S", "3600"))
+
+#: Slack over one rotation, so a flush running slightly late is not an incident.
+FLUSH_SLACK = 1.5
+
+
 def _lag_limit_s(stream: str) -> float:
     """How stale a stream may be before `/health` calls it degraded.
 
-    The recorder's own `max_silence_seconds` for anything sampled, so the API
-    and the recorder agree on when a stream is late. Market-driven streams
-    (trades) get no limit: a quiet perp is silent for legitimate reasons and
-    must never be able to turn the health page red — the same rule
-    `recorder/integrity.py` applies, and for the same reason.
+    Two terms, and leaving out the second is a mistake worth naming: this
+    endpoint measures the age of data **on disk**, while the recorder buffers
+    for up to a full rotation before writing. Judging flushed data by the
+    stream's sampling cadence alone marks every stream degraded within minutes
+    of a healthy recorder's last flush, and a status page that is permanently
+    red is one nobody reads — which defeats the purpose of publishing it.
+
+    So the limit is the recorder's own silence threshold *plus* the time data
+    may legitimately sit in a buffer. Market-driven streams (trades) still get
+    no limit at all: a quiet perp is silent for legitimate reasons and must
+    never turn the page red, the same rule `recorder/integrity.py` applies.
     """
     cadence = cadence_for(stream)
-    return MAX_SILENCE_S if cadence is not None else float("inf")
+    if cadence is None:
+        return float("inf")
+    return MAX_SILENCE_S + FLUSH_INTERVAL_S * FLUSH_SLACK
 
 
 @router.get("/health", response_model=HealthOut)

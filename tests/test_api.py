@@ -709,3 +709,24 @@ def test_assets_prefers_recorded_specs_over_tape_inference(specs_client: TestCli
     assert others, "fixture should contain an asset without a recorded spec"
     assert all(r["source"] == "inferred" for r in others)
     assert all(r["max_leverage"] is None for r in others)
+
+
+def test_a_healthy_recorder_is_not_degraded_merely_for_buffering(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Flushed data is older than live data by up to a rotation.
+
+    The fixture is historical, so every stream is hours stale — which is what a
+    freshly flushed partition looks like from here. With the flush interval
+    accounted for, that must not read as an incident, or the status page is red
+    forever and stops meaning anything.
+    """
+    from funding_atlas.api.routes import health as health_route
+
+    limit = health_route._lag_limit_s("funding")
+    assert limit > health_route.MAX_SILENCE_S, "flush interval must widen the limit"
+    assert limit >= health_route.FLUSH_INTERVAL_S
+
+    # A market-driven stream still has no limit: a quiet perp cannot turn the
+    # page red, however long it has been silent.
+    assert health_route._lag_limit_s("trades") == float("inf")
