@@ -107,6 +107,13 @@ Parquet + DuckDB rather than a time-series database: research queries are
 columnar scans over immutable history, which is what this layout is for, and
 it costs nothing to run.
 
+## Operations
+
+Credential layout — which host holds what, and why — is in
+[docs/deploy-keys.md](docs/deploy-keys.md). Servers get read-only deploy keys
+generated on the host itself; only the workstation holds write access, on a
+token that expires.
+
 ## Roadmap
 
 - [x] Repository skeleton, clock, event schema, venue interfaces
