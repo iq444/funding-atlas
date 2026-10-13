@@ -397,3 +397,20 @@ async def test_testnet_targets_the_testnet_info_endpoint() -> None:
     await rest.asset_specs()
     await client.aclose()
     assert rest._url == "https://api.hyperliquid-testnet.xyz/info"
+
+
+async def test_delisting_is_read_from_the_universe_entry() -> None:
+    """`isDelisted` is present only on removed assets (doc §4), and it is the
+    one field that says an asset's rules no longer apply. The `asset_specs`
+    history needs it to date a delisting, so absence means listed rather than
+    unknown."""
+    universe = [
+        {"szDecimals": 5, "name": "BTC", "maxLeverage": 40, "marginTableId": 56},
+        {"szDecimals": 2, "name": "GONE", "maxLeverage": 3, "isDelisted": True},
+    ]
+    rest, _, client, _ = make({"meta": dict(META, universe=universe)})
+    specs = await rest.asset_specs()
+    await client.aclose()
+
+    assert specs["BTC"].is_delisted is False
+    assert specs["GONE"].is_delisted is True

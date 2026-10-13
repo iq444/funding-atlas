@@ -28,6 +28,11 @@ from funding_atlas.venues.records import STREAMS
 #: silently unioning two incompatible generations of a column and reporting a
 #: number nobody can reproduce. A reader that finds an unexpected version can
 #: refuse the partition instead of guessing.
+#:
+#: Adding a *new* stream does not bump it: no existing file's columns change, so
+#: every file already on disk still reads exactly as it was written. Bumping for
+#: a new stream would instead make every historical partition look stale and
+#: force a reader to special-case a version difference that means nothing.
 SCHEMA_VERSION = 1
 
 SCHEMA_VERSION_KEY = b"funding_atlas.schema_version"
@@ -160,12 +165,41 @@ _OPEN_INTEREST_SCHEMA = pa.schema(
     ]
 )
 
+# Asset specs: the venue's trading rules, resampled on a cadence. One row per
+# (asset, poll), every poll, including the polls where nothing changed — see the
+# note on ASSET_PARTITIONED for why this stream is not partitioned per asset,
+# and `records.AssetSpecSample` for why it is recorded at all.
+_ASSET_SPECS_SCHEMA = pa.schema(
+    [
+        *_KEY_FIELDS,
+        *_TS_FIELDS,
+        # Decimal, not float, for the same reason as every other money-shaped
+        # column: a lot step read back as 0.0009999999 rounds a size down to the
+        # previous lot and the venue rejects the order — or worse, accepts a
+        # smaller one and leaves a hedge short.
+        pa.field("price_tick", _DEC, nullable=False),
+        # Nullable, and the only nullable field here: a venue with no
+        # significant-figure rule is a real state, distinct from one we failed
+        # to read. int32 because the value is a digit count, not a quantity.
+        pa.field("price_sig_figs", pa.int32(), nullable=True),
+        pa.field("size_lot", _DEC, nullable=False),
+        pa.field("min_notional", _DEC, nullable=False),
+        # Leverage is a ratio rather than a price, but it multiplies notionals
+        # in every margin calculation, so it stays out of float too.
+        pa.field("max_leverage", _DEC, nullable=False),
+        pa.field("is_perp", pa.bool_(), nullable=False),
+        pa.field("is_delisted", pa.bool_(), nullable=False),
+    ]
+)
+
+
 _SCHEMAS: dict[str, pa.Schema] = {
     "trades": _TRADES_SCHEMA,
     "mids": _MIDS_SCHEMA,
     "l2": _L2_SCHEMA,
     "funding": _FUNDING_SCHEMA,
     "open_interest": _OPEN_INTEREST_SCHEMA,
+    "asset_specs": _ASSET_SPECS_SCHEMA,
 }
 
 # Streams partitioned down to the asset, matching README's "Storage layout".
@@ -177,6 +211,14 @@ _SCHEMAS: dict[str, pa.Schema] = {
 # cross-sectional question ("funding across the universe right now") would have
 # to open all of them. They keep `asset` as a column and partition by date only,
 # so one file answers the dispersion query.
+#
+# asset_specs is the strongest case of all for date-only: the question it exists
+# to answer is explicitly cross-sectional — "what were the rules for every asset
+# at time T" — because an order router validating a basket needs the whole
+# universe's ticks and lots at one instant, not one asset's history. It is also
+# tiny and uniform (~200 rows every 15 minutes, every asset in every poll), so
+# per-asset directories would turn 22k daily rows into 200 files of a hundred
+# rows each. `asset` stays a column and one file answers the whole question.
 ASSET_PARTITIONED: frozenset[str] = frozenset({"trades", "mids", "l2"})
 
 assert set(_SCHEMAS) == set(STREAMS), "every stream in records.STREAMS needs a schema"
@@ -267,6 +309,14 @@ def _columns(stream: str, records: Sequence[Any]) -> dict[str, list[Any]]:
         cols["mark_price"] = [r.mark_price for r in records]
     elif stream == "open_interest":
         cols["open_interest"] = [r.open_interest for r in records]
+    elif stream == "asset_specs":
+        cols["price_tick"] = [r.price_tick for r in records]
+        cols["price_sig_figs"] = [r.price_sig_figs for r in records]
+        cols["size_lot"] = [r.size_lot for r in records]
+        cols["min_notional"] = [r.min_notional for r in records]
+        cols["max_leverage"] = [r.max_leverage for r in records]
+        cols["is_perp"] = [r.is_perp for r in records]
+        cols["is_delisted"] = [r.is_delisted for r in records]
     else:  # pragma: no cover - guarded by schema_for
         raise KeyError(f"unknown stream {stream!r}")
     return cols

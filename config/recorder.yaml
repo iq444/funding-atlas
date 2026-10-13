@@ -44,6 +44,20 @@ streams:
     # Reported in coin base units, not notional — converting needs a mark price
     # from the same sample, so both arrive on the same venue poll.
     poll_seconds: 60
+  asset_specs:
+    enabled: true
+    # The venue's own trading rules (tick, lot, min notional, max leverage,
+    # delisting), sampled so that a backtest can size orders by the rules that
+    # applied *then*. The venue serves only the current `meta`, so this history
+    # cannot be backfilled — like the book, a sample not taken is lost.
+    #
+    # Every poll is written, not only the polls where something changed: with
+    # change-only rows, "no row for Tuesday" means either "nothing changed" or
+    # "the recorder was down", and that is exactly the ambiguity gap detection
+    # exists to remove. 900s x ~200 perps is ~22k rows a day, far below one
+    # minute of book snapshots, and a uniform cadence is what lets the monitor
+    # treat silence here as failure.
+    poll_seconds: 900
 
 # Gap detection: the recorder must know when it lost data, because lost book
 # data is unrecoverable. Any gap is written to the event log as a first-class

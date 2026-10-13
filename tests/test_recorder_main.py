@@ -140,7 +140,9 @@ def config_for(tmp_path: Path, **over: Any) -> RecorderConfig:
     return RecorderConfig.model_validate(raw)
 
 
-def build(tmp_path: Path, feed: FakeFeed, **kwargs: Any) -> tuple[Recorder, YieldClock]:
+def build(
+    tmp_path: Path, feed: FakeFeed, *, config: RecorderConfig | None = None, **kwargs: Any
+) -> tuple[Recorder, YieldClock]:
     clock = YieldClock(NOON)
 
     async def factory(config: RecorderConfig, _clock: Any, _sink: Any) -> FakeFeed:
@@ -150,7 +152,7 @@ def build(tmp_path: Path, feed: FakeFeed, **kwargs: Any) -> tuple[Recorder, Yiel
         return feed
 
     recorder = Recorder(
-        config_for(tmp_path),
+        config if config is not None else config_for(tmp_path),
         clock,
         feed_factory=factory,
         drain_timeout_s=0.05,
@@ -426,3 +428,30 @@ async def test_cadences_follow_the_config(tmp_path: Path) -> None:
     assert cadences["trades"] is None
     assert cadences["mids"] == 1.0
     assert cadences["funding"] == 60.0
+
+
+async def test_asset_specs_is_registered_end_to_end(tmp_path: Path) -> None:
+    """Enabling the stream must be enough: a writer, a cadence and a watched
+    monitor entry, with no further edit here. The failure this guards against is
+    a stream that is configured, polled, and then dropped on the floor."""
+    config = config_for(
+        tmp_path,
+        streams={
+            "funding": {"enabled": True, "poll_seconds": 60},
+            "trades": {"enabled": True},
+            "mids": {"enabled": False},
+            "l2": {"enabled": False, "assets": []},
+            "open_interest": {"enabled": False},
+            "asset_specs": {"enabled": True, "poll_seconds": 900},
+        },
+    )
+    assert "asset_specs" in recorder_main.enabled_streams(config)
+    assert "asset_specs" in recorder_main.build_writers(config, SimClock(NOON))
+    # We set the cadence, so silence on it is evidence of failure — unlike trades.
+    assert recorder_main.cadences_for(config)["asset_specs"] == 900.0
+
+    recorder, _clock = build(tmp_path, FakeFeed([]), config=config)
+    recorder._register_streams()
+    state = recorder.monitor.state("asset_specs")
+    assert state is not None
+    assert state.is_regular

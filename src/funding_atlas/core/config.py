@@ -38,6 +38,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from funding_atlas.venues.records import STREAMS
 
 __all__ = [
+    "AssetSpecsStream",
     "ConfigError",
     "FundingStream",
     "IntegrityConfig",
@@ -191,6 +192,30 @@ class OpenInterestStream(_StreamBase):
         return self
 
 
+class AssetSpecsStream(_StreamBase):
+    """The venue's trading rules, resampled.
+
+    Defaults off for the same reason as `open_interest`: a stream the loader
+    turns on by itself is a stream nobody sized the disk for.
+
+    `poll_seconds: 900` by default. Listings, `szDecimals` changes and leverage
+    cuts happen on a timescale of days, so 15 minutes is already far finer than
+    the signal — ~200 assets x 96 polls is ~22k rows a day, which is noise next
+    to one minute of book snapshots. The cadence is uniform on purpose: it makes
+    silence on this stream mean the same thing it means on every other regular
+    stream, which is what lets gap detection judge it at all.
+    """
+
+    enabled: bool = False
+    poll_seconds: int = Field(default=900, ge=0)
+
+    @model_validator(mode="after")
+    def _check_interval(self) -> AssetSpecsStream:
+        if self.enabled and self.poll_seconds == 0:
+            raise ValueError("streams.asset_specs is enabled but poll_seconds is 0")
+        return self
+
+
 class StreamsConfig(_Base):
     """One entry per stream in `records.STREAMS`.
 
@@ -208,11 +233,20 @@ class StreamsConfig(_Base):
     mids: MidsStream = MidsStream()
     l2: L2Stream = Field(default_factory=L2Stream, alias="l2_book")
     open_interest: OpenInterestStream = OpenInterestStream()
+    asset_specs: AssetSpecsStream = AssetSpecsStream()
 
     @model_validator(mode="after")
     def _check_something_is_enabled(self) -> StreamsConfig:
         if not any(
-            s.enabled for s in (self.funding, self.trades, self.mids, self.l2, self.open_interest)
+            s.enabled
+            for s in (
+                self.funding,
+                self.trades,
+                self.mids,
+                self.l2,
+                self.open_interest,
+                self.asset_specs,
+            )
         ):
             raise ValueError("every stream is disabled; the recorder would record nothing")
         return self

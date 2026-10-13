@@ -194,11 +194,11 @@ async def build_feed(config: RecorderConfig, clock: Clock, sink: EventSink) -> M
 async def build_poller(
     config: RecorderConfig, clock: Clock, consumer: StreamConsumer, sink: EventSink
 ) -> ContextPoller | None:
-    """Construct the REST poller that carries funding and open interest.
+    """Construct the REST poller that carries funding, open interest and specs.
 
     Lazily imported for the same reason as `build_feed`. Returns None when the
-    venue has no poller or neither polled stream is enabled, so the supervisor
-    simply runs one fewer task.
+    venue has no poller or no polled stream is enabled, so the supervisor simply
+    runs one fewer task.
     """
     if config.venue != "hyperliquid":
         return None
@@ -232,6 +232,10 @@ def cadences_for(config: RecorderConfig) -> dict[str, float | None]:
         "l2": _positive(streams.l2.sample_ms / 1000.0),
         "funding": _positive(streams.funding.poll_seconds),
         "open_interest": _positive(streams.open_interest.poll_seconds),
+        # We choose this cadence, so silence on it is evidence of failure in a
+        # way a quiet trades stream never is — the venue always has rules to
+        # report, and a poll that stops reporting them has stopped.
+        "asset_specs": _positive(streams.asset_specs.poll_seconds),
     }
 
 
@@ -354,9 +358,9 @@ class Recorder:
         )
         heartbeat = asyncio.create_task(self._heartbeat(), name="heartbeat")
 
-        # Funding and open interest do not arrive on the socket, so without this
-        # task they are recorded as an unbroken run of gaps while everything
-        # else looks healthy. See recorder/poller.py.
+        # Funding, open interest and the venue's asset specs do not arrive on
+        # the socket, so without this task they are recorded as an unbroken run
+        # of gaps while everything else looks healthy. See recorder/poller.py.
         poller = await self._poller_factory(self._config, self._clock, self._consumer, self._sink)
         poll = asyncio.create_task(self._poll(poller), name="poll") if poller is not None else None
         if poller is None:

@@ -13,7 +13,7 @@ import pytest
 
 from funding_atlas.core.clock import SimClock
 from funding_atlas.core.events import EventType
-from funding_atlas.recorder.integrity import StreamMonitor
+from funding_atlas.recorder.integrity import SILENCE_CADENCE_FACTOR, StreamMonitor
 
 S = 1_000_000_000
 T0 = 1_700_000_000 * S
@@ -215,3 +215,37 @@ async def test_message_counts_and_unknown_stream() -> None:
 
     with pytest.raises(ValueError, match="unknown stream"):
         monitor.register("l2_book", "BTC")
+
+
+async def test_a_slow_polled_stream_is_judged_by_its_own_cadence() -> None:
+    """`max_silence_seconds` was chosen for streams sampled every 0.5-60s. A
+    15-minute poll is not down 90 seconds after its last sample — it is not even
+    due yet — and declaring it so on every heartbeat would fill the gap ledger
+    with holes that never happened."""
+    clock, sink, monitor = make(max_silence_seconds=90.0)
+    await monitor.record_message("asset_specs")
+
+    state = monitor.state("asset_specs")
+    assert state is not None
+    assert monitor.silence_limit_ns(state) == int(900 * SILENCE_CADENCE_FACTOR * S)
+
+    # Well past the global bound, still inside its own interval.
+    clock.set_now_ns(T0 + 900 * S)
+    await monitor.check()
+    assert sink.of(EventType.STREAM_DOWN) == []
+    assert monitor.is_up("asset_specs")
+
+    # Past its own interval plus the jitter slack: now it is really silent.
+    clock.set_now_ns(T0 + int(900 * SILENCE_CADENCE_FACTOR * S) + 1)
+    await monitor.check()
+    assert [p["stream"] for p in sink.of(EventType.STREAM_DOWN)] == ["asset_specs"]
+
+
+async def test_a_fast_stream_still_uses_the_global_bound() -> None:
+    """The cadence only ever *raises* the limit. Judging mids by 1.5 samples
+    would call a stream down for one dropped message."""
+    _clock, _sink, monitor = make(max_silence_seconds=90.0)
+    await monitor.record_message("mids", "BTC")
+    state = monitor.state("mids", "BTC")
+    assert state is not None
+    assert monitor.silence_limit_ns(state) == 90 * S

@@ -9,8 +9,9 @@ can later refuse a backtest that would otherwise run across invented liquidity.
 Two consequences shape the design:
 
 * Detection is pessimistic on the regular streams. A sampled stream (mids, L2,
-  funding polls) has a known cadence, so silence is evidence of failure and we
-  act on it.
+  funding and asset-spec polls) has a known cadence, so silence is evidence of
+  failure and we act on it. The cadences span three orders of magnitude, so the
+  threshold is per-stream — see `SILENCE_CADENCE_FACTOR`.
 
 * Detection is *silent* on the irregular streams. Trades are market-driven: a
   quiet hour on a thin perp produces no messages at all, and declaring that
@@ -51,7 +52,26 @@ DEFAULT_CADENCE_S: dict[str, float | None] = {
     "l2": 0.5,
     "funding": 60.0,
     "open_interest": 60.0,
+    # Polled on a cadence we set, like funding — not market-driven, so silence
+    # is failure. Slow (15 min) because the venue's rules change on a timescale
+    # of days; the cadence exists to make a gap detectable, not to catch a
+    # change quickly.
+    "asset_specs": 900.0,
 }
+
+#: A regular stream is judged silent after `max_silence_seconds` *or* this many
+#: of its own sampling intervals, whichever is longer.
+#:
+#: The global bound was chosen for streams sampled every 0.5-60 s, where 90 s is
+#: several missed samples. Applied unchanged to a 15-minute poll it fires long
+#: before the first sample is even due, so the monitor would declare a perfectly
+#: healthy stream down on every heartbeat and fill the ledger with gaps that
+#: never happened — which costs more than missing a real one, because a reader
+#: who learns the gap ledger cries wolf stops refusing backtests over it.
+#:
+#: 1.5 rather than 1.0 for the reason `IntegrityConfig` demands slack over the
+#: heartbeat: a poll landing one scheduling jitter late is not an outage.
+SILENCE_CADENCE_FACTOR = 1.5
 
 
 class EventSink(Protocol):
@@ -229,6 +249,16 @@ class StreamMonitor:
 
     # -- silence detection ------------------------------------------------
 
+    def silence_limit_ns(self, state: StreamState) -> int:
+        """How long this stream may be quiet before it is called down.
+
+        Per-stream rather than one global number, because the streams differ by
+        three orders of magnitude in cadence. See `SILENCE_CADENCE_FACTOR`.
+        """
+        if state.cadence_s is None:
+            return self._max_silence_ns
+        return max(self._max_silence_ns, int(state.cadence_s * SILENCE_CADENCE_FACTOR * NS_PER_S))
+
     async def check(self, now_ns: int | None = None) -> tuple[StreamKey, ...]:
         """Declare over-silent regular streams down. Returns what needs a reconnect.
 
@@ -246,13 +276,15 @@ class StreamMonitor:
                 # supervision loop pairs with the venue's own ws heartbeat.
                 if not state.is_regular:
                     continue
-                if state.silent_for_ns(now_ns) < self._max_silence_ns:
+                limit_ns = self.silence_limit_ns(state)
+                if state.silent_for_ns(now_ns) < limit_ns:
                     continue
                 await self._mark_down(
                     state.key.stream,
                     state.key.asset,
                     "silence",
-                    f"no message for {state.silent_for_ns(now_ns) / 1e9:.3f}s",
+                    f"no message for {state.silent_for_ns(now_ns) / 1e9:.3f}s "
+                    f"(limit {limit_ns / 1e9:.3f}s)",
                     now_ns=now_ns,
                 )
             needs_reconnect.append(state.key)

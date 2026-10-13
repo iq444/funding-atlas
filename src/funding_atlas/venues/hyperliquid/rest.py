@@ -453,6 +453,10 @@ def _spec_from_universe(entry: dict[str, Any]) -> AssetSpec:
         # This client only ever requests the perp `meta` (`dex: ""`); spot has
         # its own endpoint and a different MAX_DECIMALS of 8.
         is_perp=True,
+        # Present only on removed assets (doc §4), so absence means listed.
+        # Read rather than ignored: it is the one field that says an asset's
+        # rules no longer apply, which the `asset_specs` history has to record.
+        is_delisted=bool(entry.get("isDelisted", False)),
     )
 
 

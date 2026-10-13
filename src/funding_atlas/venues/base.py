@@ -20,6 +20,7 @@ from decimal import Decimal
 from typing import Protocol
 
 from funding_atlas.venues.records import (
+    AssetSpecSample,
     BookSnapshot,
     FundingSample,
     Mid,
@@ -28,7 +29,7 @@ from funding_atlas.venues.records import (
 )
 
 #: Everything an adapter may emit. The writers' schemas are defined over these.
-type MarketRecord = Trade | Mid | BookSnapshot | FundingSample | OpenInterest
+type MarketRecord = Trade | Mid | BookSnapshot | FundingSample | OpenInterest | AssetSpecSample
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +58,11 @@ class AssetSpec:
     min_notional: Decimal
     max_leverage: Decimal
     is_perp: bool
+    #: Listed in the venue's universe but no longer tradable. Carried here
+    #: rather than dropped so the `asset_specs` history can say *when* an asset
+    #: stopped trading; a spec silently vanishing from the mapping would be
+    #: indistinguishable from a poll that never happened.
+    is_delisted: bool = False
 
 
 @dataclass(frozen=True, slots=True)

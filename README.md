@@ -137,6 +137,15 @@ derived from this data is profitable, and it is not investment advice. Neither
 better data nor automation removes market, liquidation, counterparty or
 operational risk.
 
+## How this is built
+
+Development uses AI assistance, including implementation and architectural work.
+Direction, review and the decisions about what to build and what to leave out
+rest with the maintainer.
+
+Noted here because the question is increasingly asked and nobody should have to
+discover the answer later.
+
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE).

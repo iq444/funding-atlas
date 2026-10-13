@@ -131,6 +131,55 @@ class OpenInterest:
     ts_event_synthetic: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class AssetSpecSample:
+    """The venue's trading rules for one asset, as they stood at one instant.
+
+    Recorded rather than derived at read time because the rules *change*: perps
+    are listed and delisted, `szDecimals` is widened, `maxLeverage` is cut after
+    a volatility event. A backtest must size and round its orders by the rules
+    that applied at the simulated instant, not by the ones the venue happens to
+    publish on the day the backtest runs — sizing a 2024 trade with 2026's lot
+    step produces an order that could never have been placed, which is the
+    quietest way to manufacture a profitable fill.
+
+    Like the order book and unlike funding, this cannot be backfilled: `meta`
+    serves only the current rules and the venue publishes no history of them. A
+    sample not taken is a sample lost.
+
+    The fields mirror `venues.base.AssetSpec` — this is that spec with a
+    timestamp on it — so a consumer rebuilding the spec for an instant maps the
+    columns across one-to-one rather than re-deriving anything.
+
+    `meta` carries no timestamp of its own (API doc §4), so `ts_event_ns` is
+    always our clock's and `ts_event_synthetic` is always set. It defaults to
+    True here, the opposite way round from the pushed streams, because there is
+    no code path on which this record could carry a venue stamp.
+    """
+
+    venue: str
+    asset: str
+    ts_event_ns: int
+    ts_ingest_ns: int
+    #: Finest price step ever legal for this asset. Necessary but not
+    #: sufficient: `price_sig_figs` binds instead at large magnitudes, so both
+    #: are stored. See `AssetSpec` for why neither subsumes the other.
+    price_tick: Decimal
+    #: None means the venue imposes no significant-figure rule, which is not
+    #: the same as "we did not look".
+    price_sig_figs: int | None
+    size_lot: Decimal
+    min_notional: Decimal
+    max_leverage: Decimal
+    is_perp: bool
+    #: Still listed in the venue's universe but no longer tradable. Kept as a
+    #: flag rather than as an absent row: an asset that stops appearing would be
+    #: indistinguishable from a poll we never made.
+    is_delisted: bool = False
+    #: Always True for this stream — see the class docstring.
+    ts_event_synthetic: bool = True
+
+
 #: Stream name -> record type. Used by writers for partition paths and schemas,
 #: and by integrity checks to know which streams must be alive.
 STREAMS: dict[str, type] = {
@@ -139,4 +188,5 @@ STREAMS: dict[str, type] = {
     "l2": BookSnapshot,
     "funding": FundingSample,
     "open_interest": OpenInterest,
+    "asset_specs": AssetSpecSample,
 }

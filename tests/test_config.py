@@ -7,14 +7,18 @@ file (or the reverse) fails here rather than at 3am on a deployment.
 
 from __future__ import annotations
 
+import importlib.util
 import os
+import sys
 import textwrap
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from funding_atlas.core import config as config_module
 from funding_atlas.core.config import (
+    AssetSpecsStream,
     ConfigError,
     IntegrityConfig,
     L2Stream,
@@ -25,6 +29,7 @@ from funding_atlas.core.config import (
     UniverseConfig,
     load_config,
 )
+from funding_atlas.venues import records
 from funding_atlas.venues.records import STREAMS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -190,6 +195,10 @@ def test_enabled_stream_with_zero_interval_raises() -> None:
         MidsStream(enabled=True, sample_seconds=0)
     with pytest.raises(ValidationError, match="sample_ms is 0"):
         L2Stream(enabled=True, assets=("BTC",), sample_ms=0)
+    # An enabled stream with no interval records nothing while reporting
+    # healthy, which on a stream that cannot be backfilled is unrecoverable.
+    with pytest.raises(ValidationError, match="streams.asset_specs is enabled"):
+        AssetSpecsStream(enabled=True, poll_seconds=0)
 
 
 def test_disabled_stream_with_zero_interval_is_fine() -> None:
@@ -354,3 +363,60 @@ def test_secret_in_config_file_raises(tmp_path: Path) -> None:
         """)
     with pytest.raises(ConfigError, match="secrets come from the environment"):
         load_config(write(tmp_path, body))
+
+
+# --- asset specs ---------------------------------------------------------------
+
+
+def test_shipped_config_polls_asset_specs_every_quarter_hour() -> None:
+    """The rules change over days, so 900s is already far finer than the signal
+    — and a uniform cadence is what lets gap detection judge this stream at
+    all. ~200 perps x 96 polls is ~22k rows a day."""
+    specs = load_config(SHIPPED_CONFIG).streams.asset_specs
+    assert specs.enabled is True
+    assert specs.poll_seconds == 900
+
+
+def test_asset_specs_default_off_but_keep_the_documented_interval() -> None:
+    # Off by default for the same reason as open_interest: enabling a stream
+    # nobody sized the disk for is not the loader's call to make.
+    assert AssetSpecsStream().enabled is False
+    assert AssetSpecsStream().poll_seconds == 900
+
+
+def test_disabled_asset_specs_with_zero_interval_is_fine() -> None:
+    assert AssetSpecsStream(enabled=False, poll_seconds=0).poll_seconds == 0
+
+
+def _reimport_config_module() -> None:
+    """Execute `core/config.py` afresh under a throwaway name.
+
+    A plain `importlib.reload` would leave the real module half-executed for
+    every later test when the guard fires, which is the whole thing being
+    tested here. This leaves `sys.modules` untouched.
+    """
+    name = "_fa_config_probe"
+    spec = importlib.util.spec_from_file_location(name, config_module.__file__)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # Registered while executing: pydantic resolves the deferred annotations
+    # (`from __future__ import annotations`) through the module's entry in
+    # sys.modules, and removed afterwards so nothing else can import it.
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        del sys.modules[name]
+
+
+def test_import_guard_fires_when_streams_and_config_desync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stream added to `records.STREAMS` with no `StreamsConfig` field would
+    be unconfigurable and therefore silently never recorded. The guard turns
+    that into an import failure, which is the cheapest place to notice it."""
+    _reimport_config_module()  # clean baseline: the real pairing imports fine
+
+    monkeypatch.setitem(records.STREAMS, "ghost_stream", object)
+    with pytest.raises(RuntimeError, match="ghost_stream"):
+        _reimport_config_module()

@@ -17,6 +17,7 @@ import pytest
 from funding_atlas.store import parquet as store
 from funding_atlas.venues.records import (
     STREAMS,
+    AssetSpecSample,
     BookLevel,
     BookSnapshot,
     FundingSample,
@@ -97,6 +98,36 @@ SAMPLES: dict[str, list[object]] = {
             ts_ingest_ns=TS + 9,
             open_interest=Decimal("12345.6789"),
         )
+    ],
+    # Both rows share one `ts_event_ns`: the venue describes one instant per
+    # poll. The second carries the awkward states — a sub-satoshi tick, a
+    # delisted asset, and no significant-figure rule at all.
+    "asset_specs": [
+        AssetSpecSample(
+            venue=VENUE,
+            asset="BTC",
+            ts_event_ns=TS,
+            ts_ingest_ns=TS + 11,
+            price_tick=Decimal("0.1"),
+            price_sig_figs=5,
+            size_lot=Decimal("0.00001"),
+            min_notional=Decimal(10),
+            max_leverage=Decimal(40),
+            is_perp=True,
+        ),
+        AssetSpecSample(
+            venue=VENUE,
+            asset="kPEPE",
+            ts_event_ns=TS,
+            ts_ingest_ns=TS + 11,
+            price_tick=MEMECOIN_PRICE,
+            price_sig_figs=None,
+            size_lot=Decimal("0.000000000000000001"),
+            min_notional=Decimal("10.000000000000000001"),
+            max_leverage=Decimal(3),
+            is_perp=True,
+            is_delisted=True,
+        ),
     ],
 }
 
@@ -183,10 +214,17 @@ def test_partition_paths_match_documented_layout(tmp_path: Path) -> None:
     assert path.parent == (tmp_path / "trades" / f"venue={VENUE}" / "asset=BTC" / "date=2026-10-13")
     assert path.name == f"{TS}-000007.parquet"
 
-    # funding / open_interest are deliberately not partitioned by asset.
+    # funding / open_interest / asset_specs are deliberately not partitioned by
+    # asset: all three are cross-sectional by nature, and asset_specs most of
+    # all — "what were the rules for the whole universe at time T" must be one
+    # file, not 200 directories.
     assert store.partition_dir(tmp_path, "funding", VENUE, "BTC", day) == (
         tmp_path / "funding" / f"venue={VENUE}" / "date=2026-10-13"
     )
+    assert store.partition_dir(tmp_path, "asset_specs", VENUE, None, day) == (
+        tmp_path / "asset_specs" / f"venue={VENUE}" / "date=2026-10-13"
+    )
+    assert "asset_specs" not in store.ASSET_PARTITIONED
     assert store.partition_dir(tmp_path, "l2", VENUE, "ETH", day).parts[-2] == "asset=ETH"
 
 
@@ -276,3 +314,25 @@ def test_duckdb_reads_book_lists(tmp_path: Path) -> None:
     ).fetchone()
     assert spread == Decimal("0.01")
     assert depth == Decimal("3.75")
+
+
+def test_asset_spec_decimals_and_flags_round_trip(tmp_path: Path) -> None:
+    """The specs are what an order is rounded by, so an approximate lot step is
+    a rejected order at best and a mis-sized hedge at worst. `price_sig_figs` is
+    nullable because "the venue has no such rule" is a real state."""
+    path = tmp_path / "asset_specs.parquet"
+    store.write_table(store.records_to_table("asset_specs", SAMPLES["asset_specs"]), path)
+
+    rows = pq.read_table(path).to_pylist()
+    btc, pepe = rows
+    assert btc["price_sig_figs"] == 5
+    assert pepe["price_sig_figs"] is None
+    assert pepe["price_tick"] == MEMECOIN_PRICE
+    assert pepe["size_lot"] == Decimal("0.000000000000000001")
+    # 20 integer digits of headroom, so a $10 floor plus one wei survives whole.
+    assert pepe["min_notional"] == Decimal("10.000000000000000001")
+    assert (btc["is_delisted"], pepe["is_delisted"]) == (False, True)
+    # The flag is always set on this stream: `meta` carries no timestamp.
+    assert all(r["ts_event_synthetic"] for r in rows)
+    # One poll, one instant.
+    assert len({r["ts_event_ns"] for r in rows}) == 1
